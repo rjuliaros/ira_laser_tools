@@ -30,6 +30,7 @@ public:
 
 private:
     ros::NodeHandle node_;
+    ros::NodeHandle private_node_;
     laser_geometry::LaserProjection projector_;
     tf::TransformListener tfListener_;
 
@@ -82,9 +83,9 @@ void LaserscanMerger::laserscan_topic_parser()
 
 	for(int i=0;i<tokens.size();++i)
 	{
-	        for(int j=0;j<topics.size();++j)
+	    for(int j=0;j<topics.size();++j)
 		{
-			if( (tokens[i].compare(topics[j].name) == 0) && (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0) )
+			if((topics[j].name.compare(node_.resolveName(tokens[i])) == 0) && (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0) )
 			{
 				tmp_input_topics.push_back(topics[j].name);
 			}
@@ -123,19 +124,17 @@ void LaserscanMerger::laserscan_topic_parser()
 	}
 }
 
-LaserscanMerger::LaserscanMerger()
+LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
 {
-	ros::NodeHandle nh("~");
-
-	nh.getParam("destination_frame", destination_frame);
-	nh.getParam("cloud_destination_topic", cloud_destination_topic);
-	nh.getParam("scan_destination_topic", scan_destination_topic);
-    nh.getParam("laserscan_topics", laserscan_topics);
+	private_node_.getParam("destination_frame", destination_frame);
+	private_node_.getParam("cloud_destination_topic", cloud_destination_topic);
+	private_node_.getParam("scan_destination_topic", scan_destination_topic);
+    private_node_.getParam("laserscan_topics", laserscan_topics);
 
     this->laserscan_topic_parser();
 
-	point_cloud_publisher_ = node_.advertise<sensor_msgs::PointCloud2> (cloud_destination_topic.c_str(), 1, false);
-	laser_scan_publisher_ = node_.advertise<sensor_msgs::LaserScan> (scan_destination_topic.c_str(), 1, false);
+	point_cloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2> (cloud_destination_topic.c_str(), 1, false);
+	laser_scan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan> (scan_destination_topic.c_str(), 1, false);
 
 	tfListener_.setExtrapolationLimit(ros::Duration(0.1));
 }
