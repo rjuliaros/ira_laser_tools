@@ -15,6 +15,7 @@
 #include <Eigen/Dense>
 #include <dynamic_reconfigure/server.h>
 #include <ira_laser_tools/laserscan_multi_mergerConfig.h>
+#include <sstream>
 
 using namespace std;
 using namespace pcl;
@@ -111,13 +112,16 @@ void LaserscanMerger::laserscan_topic_parser()
             scan_subscribers.resize(input_topics.size());
 			clouds_modified.resize(input_topics.size());
 			clouds.resize(input_topics.size());
-            ROS_INFO("Subscribing to topics\t%ld", scan_subscribers.size());
+			ostringstream ss;
+			ss << "Subscribing to " << scan_subscribers.size() << " topics:";
+//            ROS_INFO("Subscribing to %f topics:", scan_subscribers.size());
 			for(int i=0; i<input_topics.size(); ++i)
 			{
                 scan_subscribers[i] = node_.subscribe<sensor_msgs::LaserScan> (input_topics[i].c_str(), 1, boost::bind(&LaserscanMerger::scanCallback,this, _1, input_topics[i]));
 				clouds_modified[i] = false;
-				cout << input_topics[i] << " ";
+				ss << " " << input_topics[i];
 			}
+			ROS_INFO_STREAM(ss.str());
 		}
 		else
             ROS_INFO("Not subscribed to any topic.");
@@ -135,8 +139,6 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
 
 	point_cloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2> (cloud_destination_topic.c_str(), 1, false);
 	laser_scan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan> (scan_destination_topic.c_str(), 1, false);
-
-	tfListener_.setExtrapolationLimit(ros::Duration(0.1));
 }
 
 void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan, std::string topic)
@@ -145,12 +147,16 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
 	sensor_msgs::PointCloud2 tmpCloud3;
 
     // Verify that TF knows how to transform from the received scan to the destination scan frame
-	tfListener_.waitForTransform(scan->header.frame_id.c_str(), destination_frame.c_str(), scan->header.stamp, ros::Duration(1));
-
-	projector_.transformLaserScanToPointCloud(scan->header.frame_id, *scan, tmpCloud1, tfListener_);
 	try
 	{
-		tfListener_.transformPointCloud(destination_frame.c_str(), tmpCloud1, tmpCloud2);
+	    tfListener_.waitForTransform(scan->header.frame_id.c_str(), destination_frame.c_str(), scan->header.stamp, ros::Duration(1));
+	    projector_.transformLaserScanToPointCloud(scan->header.frame_id, *scan, tmpCloud1, tfListener_);
+	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
+
+	try
+	{
+    	tfListener_.waitForTransform(destination_frame.c_str(), tmpCloud1.header.frame_id.c_str(), /*ros::Time::now() */tmpCloud1.header.stamp, ros::Duration(1));
+	 	tfListener_.transformPointCloud(destination_frame.c_str(), tmpCloud1, tmpCloud2); //this function always fails the first time it is called, don't know why
 	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
 
 	for(int i=0; i<input_topics.size(); ++i)
