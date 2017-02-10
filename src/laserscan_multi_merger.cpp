@@ -56,6 +56,7 @@ private:
     string destination_frame;
     string cloud_destination_topic;
     string scan_destination_topic;
+    bool check_topic_type;
     string laserscan_topics;
 };
 
@@ -82,13 +83,18 @@ void LaserscanMerger::laserscan_topic_parser()
 
 	vector<string> tmp_input_topics;
 
-	for(int i=0;i<tokens.size();++i)
-	{
-	    for(int j=0;j<topics.size();++j)
+	if (check_topic_type == false) {
+	     tmp_input_topics = tokens;
+	}
+	else {
+		for(int i=0;i<tokens.size();++i)
 		{
-			if((topics[j].name.compare(node_.resolveName(tokens[i])) == 0) && (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0) )
+		    for(int j=0;j<topics.size();++j)
 			{
-				tmp_input_topics.push_back(topics[j].name);
+				if((topics[j].name.compare(node_.resolveName(tokens[i])) == 0) && (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0) )
+				{
+					tmp_input_topics.push_back(topics[j].name);
+				}
 			}
 		}
 	}
@@ -149,13 +155,16 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
     // Verify that TF knows how to transform from the received scan to the destination scan frame
 	try
 	{
-	    tfListener_.waitForTransform(scan->header.frame_id.c_str(), destination_frame.c_str(), scan->header.stamp, ros::Duration(1));
+	    if(!tfListener_.waitForTransform(scan->header.frame_id.c_str(), destination_frame.c_str(), scan->header.stamp, ros::Duration(1)))
+	        return;
 	    projector_.transformLaserScanToPointCloud(scan->header.frame_id, *scan, tmpCloud1, tfListener_);
 	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
 
 	try
 	{
-    	tfListener_.waitForTransform(destination_frame.c_str(), tmpCloud1.header.frame_id.c_str(), /*ros::Time::now() */tmpCloud1.header.stamp, ros::Duration(1));
+    	if (!tfListener_.waitForTransform(destination_frame.c_str(), tmpCloud1.header.frame_id.c_str(), /*ros::Time::now() */tmpCloud1.header.stamp, ros::Duration(1)))
+    	    return;
+
 	 	tfListener_.transformPointCloud(destination_frame.c_str(), tmpCloud1, tmpCloud2); //this function always fails the first time it is called, don't know why
 	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
 
