@@ -157,16 +157,28 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
 	sensor_msgs::PointCloud tmpCloud1,tmpCloud2;
 	sensor_msgs::PointCloud2 tmpCloud3;
 
-    // Verify that TF knows how to transform from the received scan to the fixed scan frame
+        // Verify that TF knows how to transform from the received scan to the fixed scan frame
+        // as we are using a high precission projector, we need the tf at the time of the last
+        // scan
 	try
 	{
-	    if(!tfListener_.waitForTransform(scan->header.frame_id.c_str(), fixed_frame.c_str(), scan->header.stamp, ros::Duration(1)))
+            ros::Time end_stamp = (scan->header.stamp + ros::Duration().fromSec( (scan->ranges.size()-1) * scan->time_increment));
+	    if(!tfListener_.waitForTransform(fixed_frame.c_str(), scan->header.frame_id.c_str(), end_stamp, ros::Duration(10)))
 	        return;
+	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
+	try
+	{
 	    projector_.transformLaserScanToPointCloud(fixed_frame.c_str(), *scan, tmpCloud1, tfListener_);
+	}catch (tf::TransformException ex){
+		ROS_ERROR("%s",ex.what());
+		return;
+	}
+	try
+	{
 	 	tfListener_.transformPointCloud(scan->header.frame_id.c_str(), tmpCloud1, tmpCloud2); //this function always fails the first time it is called, don't know why
+	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
 			sensor_msgs::convertPointCloudToPointCloud2(tmpCloud2,tmpCloud3);
 
-	}catch (tf::TransformException ex){ROS_ERROR("%s",ex.what());return;}
 
 	for(int i=0; i<input_topics.size(); ++i)
 	{
