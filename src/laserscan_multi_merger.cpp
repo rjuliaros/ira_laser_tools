@@ -211,8 +211,16 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
 	    }
 	    // current stamp tiene que ser el ultimo tiempo comun
 		pcl::PCLPointCloud2 merged_cloud;
-
-		for(int i=0; i<clouds_modified.size(); ++i)
+		int first = 0;
+		for (first = 0; first < clouds_modified.size(); first++)
+			if (sensor_clouds[first].points.size() != 0)
+break;
+if (first == clouds_modified.size())
+{
+ROS_INFO_THROTTLE(5,"Empty clouds!");
+return;
+}
+		for(int i=first; i<clouds_modified.size(); ++i)
 		{
 	 	    tfListener_.transformPointCloud(destination_frame.c_str(), current_stamp, sensor_clouds[i], fixed_frame, tmpCloud2); //this function always fails the first time it is called, don't know why
 			
