@@ -27,7 +27,8 @@ public:
     LaserscanMerger();
     void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan, std::string topic);
 //    void pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPointCloud2 *merged_cloud);
-    void pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPointCloud2 *merged_cloud, ros::Time & stamp);
+//    void pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPointCloud2 *merged_cloud, ros::Time & stamp);
+    void pointcloud_to_laserscan(Eigen::MatrixXf points, std::vector<float> &intensities, pcl::PCLPointCloud2 *merged_cloud, ros::Time & stamp);
     void reconfigureCallback(laserscan_multi_mergerConfig &config, uint32_t level);
 
 private:
@@ -151,6 +152,43 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
 	point_cloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2> (cloud_destination_topic.c_str(), 1, false);
 	laser_scan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan> (scan_destination_topic.c_str(), 1, false);
 }
+bool
+getPointCloudIntensities (const pcl::PCLPointCloud2 &in, std::vector<float> &out)
+{
+  // Get X-Y-Z indices
+  int x_idx = getFieldIndex (in, "intensities");
+
+  if (x_idx == -1)
+  {
+    PCL_ERROR ("Input dataset has no intensities coordinates! Cannot convert to get them.\n");
+    return (false);
+  }
+
+  if (in.fields[x_idx].datatype != pcl::PCLPointField::FLOAT32)
+  {
+    PCL_ERROR ("Intensities coordinates not floats. Currently only floats are supported.\n");
+    return (false);
+  }
+
+  size_t npts = in.width * in.height;
+  //out = Eigen::MatrixXf::Ones (4, npts);
+  out.resize(npts);
+
+  Eigen::Array4i xyz_offset (in.fields[x_idx].offset, 0,0,0);//in.fields[y_idx].offset, in.fields[z_idx].offset, 0);
+
+  // Copy the input dataset into Eigen format
+  for (size_t i = 0; i < npts; ++i)
+  {
+     // Unoptimized memcpys: assume fields x, y, z are in random order
+     memcpy (&out[i], &in.data[xyz_offset[0]], sizeof (float));
+     //memcpy (&out (1, i), &in.data[xyz_offset[1]], sizeof (float));
+     //memcpy (&out (2, i), &in.data[xyz_offset[2]], sizeof (float));
+
+     xyz_offset += in.point_step;
+  }
+
+  return (true);
+}
 
 void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan, std::string topic)
 {
@@ -237,11 +275,17 @@ return;
 		getPointCloudAsEigen(merged_cloud,points);
 
         // a este le tenemos que pasar el ultimo timepo comun.
-		pointcloud_to_laserscan(points, &merged_cloud, current_stamp);
+std::vector<float> intensities;
+if (getPointCloudIntensities (merged_cloud, intensities))
+//ROS_INFO_THROTTLE(1, "I have intensities %d, points is %d", intensities.size(), points.size());
+		pointcloud_to_laserscan(points, intensities, &merged_cloud, current_stamp);
 	}
 }
 
-void LaserscanMerger::pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPointCloud2 *merged_cloud, ros::Time & stamp)
+
+
+
+void LaserscanMerger::pointcloud_to_laserscan(Eigen::MatrixXf points, std::vector<float> &intensities, pcl::PCLPointCloud2 *merged_cloud, ros::Time & stamp)
 {
 	sensor_msgs::LaserScanPtr output(new sensor_msgs::LaserScan());
 	output->header = pcl_conversions::fromPCL(merged_cloud->header);
@@ -257,6 +301,9 @@ void LaserscanMerger::pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPo
 
 	uint32_t ranges_size = std::ceil((output->angle_max - output->angle_min) / output->angle_increment);
 	output->ranges.assign(ranges_size, output->range_max + 1.0);
+
+        output->intensities.assign(ranges_size, 0);
+        bool has_intensities = (points.size() / 4) == intensities.size();
 
 	for(int i=0; i<points.cols(); i++)
 	{
@@ -287,7 +334,11 @@ void LaserscanMerger::pointcloud_to_laserscan(Eigen::MatrixXf points, pcl::PCLPo
 
 
 		if (output->ranges[index] * output->ranges[index] > range_sq)
+                {
 			output->ranges[index] = sqrt(range_sq);
+                    if (has_intensities)
+                        output->intensities[index] = intensities[i];
+                }
 	}
 
 	laser_scan_publisher_.publish(output);
