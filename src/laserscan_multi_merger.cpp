@@ -21,8 +21,7 @@ class LaserscanMerger
 {
 public:
   LaserscanMerger();
-  void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan, std::string topic);
-  void pointcloudToLaserscan(Eigen::MatrixXf points, std::vector<float>& intensities, ros::Time& stamp);
+  void scanCallback(const sensor_msgs::LaserScan& scan, std::string topic);
   void pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge, sensor_msgs::LaserScan& scan);
   void reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level);
 
@@ -37,9 +36,6 @@ private:
   std::vector<ros::Subscriber> scan_subscribers;
   std::vector<bool> clouds_modified;
 
-  std::vector<pcl::PCLPointCloud2> pcl_clouds;
-  std::vector<sensor_msgs::PointCloud> sensor_clouds;
-
   std::map<std::string, sensor_msgs::LaserScan> input_scans_;
   std::map<std::string, pcl::PointCloud<pcl::PointXYZI>> output_clouds_;
 
@@ -47,13 +43,13 @@ private:
 
   void laserscanTopicParser();
 
-  double angle_min;
-  double angle_max;
-  double angle_increment;
-  double time_increment;
-  double scan_time;
-  double range_min;
-  double range_max;
+  double angle_min_;
+  double angle_max_;
+  double angle_increment_;
+  double time_increment_;
+  double scan_time_;
+  double range_min_;
+  double range_max_;
 
   std::string destination_frame_;
   std::string fixed_frame_;
@@ -65,13 +61,13 @@ private:
 
 void LaserscanMerger::reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level)
 {
-  this->angle_min = config.angle_min;
-  this->angle_max = config.angle_max;
-  this->angle_increment = config.angle_increment;
-  this->time_increment = config.time_increment;
-  this->scan_time = config.scan_time;
-  this->range_min = config.range_min;
-  this->range_max = config.range_max;
+  this->angle_min_ = config.angle_min;
+  this->angle_max_ = config.angle_max;
+  this->angle_increment_ = config.angle_increment;
+  this->time_increment_ = config.time_increment;
+  this->scan_time_ = config.scan_time;
+  this->range_min_ = config.range_min;
+  this->range_max_ = config.range_max;
 }
 
 void LaserscanMerger::laserscanTopicParser()
@@ -123,15 +119,15 @@ void LaserscanMerger::laserscanTopicParser()
     {
       scan_subscribers.resize(input_topics.size());
       clouds_modified.resize(input_topics.size());
-      pcl_clouds.resize(input_topics.size());
-      sensor_clouds.resize(input_topics.size());
       std::ostringstream ss;
       ss << "Subscribing to " << scan_subscribers.size() << " topics:";
       //            ROS_INFO("Subscribing to %f topics:", scan_subscribers.size());
       for (int i = 0; i < input_topics.size(); ++i)
       {
-        scan_subscribers[i] = node_.subscribe<sensor_msgs::LaserScan>(
-            input_topics[i].c_str(), 1, boost::bind(&LaserscanMerger::scanCallback, this, _1, input_topics[i]));
+        // this node_.subscribe<MsgType, const MsgType&> is needed to bind to a callback which receives a const Type&
+        // otherwise, we are forced to subscribe to callback which receives a shared_ptr
+        scan_subscribers[i] = node_.subscribe<sensor_msgs::LaserScan, const sensor_msgs::LaserScan&>(
+            input_topics[i], 1, boost::bind(&LaserscanMerger::scanCallback, this, _1, input_topics[i]));
         clouds_modified[i] = false;
         ss << " " << input_topics[i];
       }
@@ -153,37 +149,35 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
 
   this->laserscanTopicParser();
 
-  pointcloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2>(cloud_destination_topic_.c_str(), 1, false);
-  laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_.c_str(), 1, false);
+  pointcloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2>(cloud_destination_topic_, 1, false);
+  laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_, 1, false);
 }
 
-void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan, std::string topic)
+void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, std::string topic)
 {
   // Verify that TF knows how to transform from the received scan to the fixed scan frame
   // as we are using a high precission projector, we need the tf at the time of the last
   // scan
   try
   {
-    ros::Time end_stamp =
-        (scan->header.stamp + ros::Duration().fromSec((scan->ranges.size() - 1) * scan->time_increment));
-    if (!tf_listener_.waitForTransform(fixed_frame_.c_str(), scan->header.frame_id.c_str(), end_stamp,
-                                       ros::Duration(10)))
+    ros::Time end_stamp = (scan.header.stamp + ros::Duration().fromSec((scan.ranges.size() - 1) * scan.time_increment));
+    if (!tf_listener_.waitForTransform(fixed_frame_, scan.header.frame_id, end_stamp, ros::Duration(10)))
       return;
   }
-  catch (tf::TransformException ex)
+  catch (const tf::TransformException& ex)
   {
     ROS_ERROR("%s", ex.what());
     return;
   }
 
-  input_scans_[topic] = *scan;
+  input_scans_[topic] = scan;
   sensor_msgs::PointCloud2 scan_in_fixed_frame;
   try
   {
-    projector_.transformLaserScanToPointCloud(fixed_frame_, *scan, scan_in_fixed_frame, tf_listener_);
+    projector_.transformLaserScanToPointCloud(fixed_frame_, scan, scan_in_fixed_frame, tf_listener_);
     // need this weird if. otherwise, in case of no intensities on input, it will keep printing at each iteration
     // a warning message about intensities missing field
-    if (scan->intensities.size() != 0)
+    if (scan.intensities.size() != 0)
     {
       pcl::fromROSMsg(scan_in_fixed_frame, output_clouds_[topic]);
     }
@@ -194,7 +188,7 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
       pcl::copyPointCloud(cloud_without_intensities, output_clouds_[topic]);
     }
   }
-  catch (tf::TransformException ex)
+  catch (const tf::TransformException& ex)
   {
     ROS_ERROR("%s", ex.what());
     return;
@@ -225,23 +219,26 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
                                               })
                                  ->second.header.stamp,
                              current_stamp);
-    std::string error_msg;
 
     int first = 0;
     // for (first = 0; first < clouds_modified.size(); first++)
-    //  if (output_clouds_[first].width != 0)
+    //  if (output_clouds_[first].points.size() != 0)
     //    break;
+
     if (first == clouds_modified.size())
     {
-      ROS_INFO_THROTTLE(5, "Empty clouds!");
+      ROS_INFO_THROTTLE(5, "Input is empty (either laserscan was empty or couldn't be transformed into fixed frame)");
       return;
     }
+
     for (int i = first; i < clouds_modified.size(); ++i)
     {
       clouds_modified[i] = false;
     }
 
     pcl::PointCloud<pcl::PointXYZI> merge;
+    merge.header.frame_id = destination_frame_;
+    merge.header.stamp = pcl_conversions::toPCL(current_stamp);
     for (auto& c : output_clouds_)
     {
       pcl::PointCloud<pcl::PointXYZI> transformed;
@@ -249,18 +246,14 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
                                    tf_listener_);
       merge += transformed;
     }
-    ROS_INFO_THROTTLE(1, " Hi immm");
-    merge.header.stamp = pcl_conversions::toPCL(current_stamp);
-    merge.header.frame_id = destination_frame_;
+
     pointcloud_publisher_.publish(merge);
 
-    // a este le tenemos que pasar el ultimo timepo comun.
-    std::vector<float> intensities;
-    //    pointcloudToLaserscan(points, intensities, current_stamp);
     sensor_msgs::LaserScan output_scan;
-    pointcloudToLaserscan(merge, output_scan);
-    output_scan.header.stamp = current_stamp;
     output_scan.header.frame_id = destination_frame_;
+    output_scan.header.stamp = current_stamp;
+    pointcloudToLaserscan(merge, output_scan);
+
     laserscan_publisher_.publish(output_scan);
   }
 }
@@ -268,13 +261,13 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan,
 void LaserscanMerger::pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge,
                                             sensor_msgs::LaserScan& output)
 {
-  output.angle_min = this->angle_min;
-  output.angle_max = this->angle_max;
-  output.angle_increment = this->angle_increment;
-  output.time_increment = this->time_increment;
-  output.scan_time = this->scan_time;
-  output.range_min = this->range_min;
-  output.range_max = this->range_max;
+  output.angle_min = this->angle_min_;
+  output.angle_max = this->angle_max_;
+  output.angle_increment = this->angle_increment_;
+  output.time_increment = this->time_increment_;
+  output.scan_time = this->scan_time_;
+  output.range_min = this->range_min_;
+  output.range_max = this->range_max_;
 
   uint32_t ranges_size = std::ceil((output.angle_max - output.angle_min) / output.angle_increment);
   output.ranges.assign(ranges_size, output.range_max + 1.0);
@@ -311,108 +304,9 @@ void LaserscanMerger::pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI
     if (output.ranges[index] * output.ranges[index] > range_sq)
     {
       output.ranges[index] = sqrt(range_sq);
-      bool has_intensities = true;
-      if (has_intensities)
-        output.intensities[index] = intensity;
+      output.intensities[index] = intensity;
     }
   }
-
-  ////  bool has_intensities = (points.size() / 4) == intensities.size();
-  ////
-  ////  for (int i = 0; i < points.cols(); i++)
-  ////  {
-  ////    const float& x = points(0, i);
-  ////    const float& y = points(1, i);
-  ////    const float& z = points(2, i);
-  ////
-  ////    if (std::isnan(x) || std::isnan(y) || std::isnan(z))
-  ////    {
-  ////      ROS_DEBUG("rejected for nan in point(%f, %f, %f)\n", x, y, z);
-  ////      continue;
-  ////    }
-  ////
-  ////    double range_sq = y * y + x * x;
-  ////    double range_min_sq_ = output.range_min * output.range_min;
-  ////    if (range_sq < range_min_sq_)
-  ////    {
-  ////      ROS_DEBUG("rejected for range %f below minimum value %f. Point: (%f, %f, %f)", range_sq, range_min_sq_, x,
-  /// y, z);
-  ////      continue;
-  ////    }
-  ////
-  ////    double angle = atan2(y, x);
-  ////    if (angle < output.angle_min || angle > output.angle_max)
-  ////    {
-  ////      ROS_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, output.angle_min, output.angle_max);
-  ////      continue;
-  ////    }
-  ////    int index = (angle - output.angle_min) / output.angle_increment;
-  ////
-  ////    if (output.ranges[index] * output.ranges[index] > range_sq)
-  ////    {
-  ////      output.ranges[index] = sqrt(range_sq);
-  ////      if (has_intensities)
-  ////        output.intensities[index] = intensities[i];
-  ////    }
-  ////  }
-}
-
-void LaserscanMerger::pointcloudToLaserscan(Eigen::MatrixXf points, std::vector<float>& intensities, ros::Time& stamp)
-{
-  sensor_msgs::LaserScanPtr output(new sensor_msgs::LaserScan());
-  output->header.frame_id = destination_frame_.c_str();
-  output->header.stamp = stamp;  // fixes #265
-  output->angle_min = this->angle_min;
-  output->angle_max = this->angle_max;
-  output->angle_increment = this->angle_increment;
-  output->time_increment = this->time_increment;
-  output->scan_time = this->scan_time;
-  output->range_min = this->range_min;
-  output->range_max = this->range_max;
-
-  uint32_t ranges_size = std::ceil((output->angle_max - output->angle_min) / output->angle_increment);
-  output->ranges.assign(ranges_size, output->range_max + 1.0);
-
-  output->intensities.assign(ranges_size, 0);
-  bool has_intensities = (points.size() / 4) == intensities.size();
-
-  for (int i = 0; i < points.cols(); i++)
-  {
-    const float& x = points(0, i);
-    const float& y = points(1, i);
-    const float& z = points(2, i);
-
-    if (std::isnan(x) || std::isnan(y) || std::isnan(z))
-    {
-      ROS_DEBUG("rejected for nan in point(%f, %f, %f)\n", x, y, z);
-      continue;
-    }
-
-    double range_sq = y * y + x * x;
-    double range_min_sq_ = output->range_min * output->range_min;
-    if (range_sq < range_min_sq_)
-    {
-      ROS_DEBUG("rejected for range %f below minimum value %f. Point: (%f, %f, %f)", range_sq, range_min_sq_, x, y, z);
-      continue;
-    }
-
-    double angle = atan2(y, x);
-    if (angle < output->angle_min || angle > output->angle_max)
-    {
-      ROS_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, output->angle_min, output->angle_max);
-      continue;
-    }
-    int index = (angle - output->angle_min) / output->angle_increment;
-
-    if (output->ranges[index] * output->ranges[index] > range_sq)
-    {
-      output->ranges[index] = sqrt(range_sq);
-      if (has_intensities)
-        output->intensities[index] = intensities[i];
-    }
-  }
-
-  laserscan_publisher_.publish(output);
 }
 
 int main(int argc, char** argv)
