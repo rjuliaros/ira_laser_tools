@@ -39,9 +39,10 @@ private:
   std::vector<sensor_msgs::LaserScan> input_scans_;
   std::vector<pcl::PointCloud<pcl::PointXYZI>> output_clouds_;
 
-  std::vector<std::string> input_topics;
+  std::vector<std::string> input_topics_;
 
   void laserscanTopicParser();
+  void subscribeToTopics();
 
   // scan merging configuration
   double angle_min_;
@@ -59,6 +60,22 @@ private:
   bool check_topic_type_;
   std::string laserscan_topics_;
 };
+
+LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
+{
+  private_node_.getParam("destination_frame", destination_frame_);
+  private_node_.getParam("fixed_frame", fixed_frame_);
+  private_node_.getParam("cloud_destination_topic", cloud_destination_topic_);
+  private_node_.getParam("scan_destination_topic", scan_destination_topic_);
+
+  private_node_.getParam("laserscan_topics", laserscan_topics_);
+
+  laserscanTopicParser();
+  subscribeToTopics();
+
+  pointcloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2>(cloud_destination_topic_, 1, false);
+  laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_, 1, false);
+}
 
 void LaserscanMerger::reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level)
 {
@@ -82,11 +99,11 @@ void LaserscanMerger::laserscanTopicParser()
   std::copy(std::istream_iterator<std::string>(iss), std::istream_iterator<std::string>(),
             std::back_inserter<std::vector<std::string>>(tokens));
 
-  std::vector<std::string> tmp_input_topics;
+  std::vector<std::string> tmp_input_topics_;
 
   if (check_topic_type_ == false)
   {
-    tmp_input_topics = tokens;
+    tmp_input_topics_ = tokens;
   }
   else
   {
@@ -97,63 +114,47 @@ void LaserscanMerger::laserscanTopicParser()
         if ((topics[j].name.compare(node_.resolveName(tokens[i])) == 0) &&
             (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0))
         {
-          tmp_input_topics.push_back(topics[j].name);
+          tmp_input_topics_.push_back(topics[j].name);
         }
       }
     }
   }
 
-  sort(tmp_input_topics.begin(), tmp_input_topics.end());
-  std::vector<std::string>::iterator last = std::unique(tmp_input_topics.begin(), tmp_input_topics.end());
-  tmp_input_topics.erase(last, tmp_input_topics.end());
-
-  // Do not re-subscribe if the topics are the same
-  if ((tmp_input_topics.size() != input_topics.size()) ||
-      !equal(tmp_input_topics.begin(), tmp_input_topics.end(), input_topics.begin()))
-  {
-    // Unsubscribe from previous topics
-    for (int i = 0; i < scan_subscribers_.size(); ++i)
-      scan_subscribers_[i].shutdown();
-
-    input_topics = tmp_input_topics;
-    if (input_topics.size() > 0)
-    {
-      scan_subscribers_.resize(input_topics.size());
-      clouds_modified_.resize(input_topics.size());
-      input_scans_.resize(input_topics.size());
-      output_clouds_.resize(input_topics.size());
-      std::ostringstream ss;
-      ss << "Subscribing to " << scan_subscribers_.size() << " topics:";
-      for (int i = 0; i < input_topics.size(); ++i)
-      {
-        // this weird node_.subscribe<MsgType, const MsgType&> is needed to bind to a callback
-        // which receives a const Type&
-        // otherwise, we are forced to subscribe to callback which receives a shared_ptr
-        scan_subscribers_[i] = node_.subscribe<sensor_msgs::LaserScan, const sensor_msgs::LaserScan&>(
-            input_topics[i], 1, boost::bind(&LaserscanMerger::scanCallback, this, _1, i));
-        clouds_modified_[i] = false;
-        ss << " " << input_topics[i];
-      }
-      ROS_INFO_STREAM(ss.str());
-    }
-    else
-      ROS_INFO("Not subscribed to any topic.");
-  }
+  sort(tmp_input_topics_.begin(), tmp_input_topics_.end());
+  std::vector<std::string>::iterator last = std::unique(tmp_input_topics_.begin(), tmp_input_topics_.end());
+  tmp_input_topics_.erase(last, tmp_input_topics_.end());
+  input_topics_ = tmp_input_topics_;
 }
 
-LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
+void LaserscanMerger::subscribeToTopics()
 {
-  private_node_.getParam("destination_frame", destination_frame_);
-  private_node_.getParam("fixed_frame", fixed_frame_);
-  private_node_.getParam("cloud_destination_topic", cloud_destination_topic_);
-  private_node_.getParam("scan_destination_topic", scan_destination_topic_);
+  // Unsubscribe from previous topics
+  for (int i = 0; i < scan_subscribers_.size(); ++i)
+    scan_subscribers_[i].shutdown();
 
-  private_node_.getParam("laserscan_topics", laserscan_topics_);
+  if (input_topics_.size() > 0)
+  {
+    scan_subscribers_.resize(input_topics_.size());
+    clouds_modified_.resize(input_topics_.size());
+    input_scans_.resize(input_topics_.size());
+    output_clouds_.resize(input_topics_.size());
 
-  this->laserscanTopicParser();
-
-  pointcloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2>(cloud_destination_topic_, 1, false);
-  laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_, 1, false);
+    std::ostringstream ss;
+    ss << "Subscribing to " << scan_subscribers_.size() << " topics:";
+    for (int i = 0; i < input_topics_.size(); ++i)
+    {
+      // this weird node_.subscribe<MsgType, const MsgType&> is needed to bind to a callback
+      // which receives a const Type&
+      // otherwise, we are forced to subscribe to callback which receives a shared_ptr
+      scan_subscribers_[i] = node_.subscribe<sensor_msgs::LaserScan, const sensor_msgs::LaserScan&>(
+          input_topics_[i], 1, boost::bind(&LaserscanMerger::scanCallback, this, _1, i));
+      clouds_modified_[i] = false;
+      ss << " " << input_topics_[i];
+    }
+    ROS_INFO_STREAM(ss.str());
+  }
+  else
+    ROS_INFO("Not subscribed to any topic.");
 }
 
 void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, int input_number)
