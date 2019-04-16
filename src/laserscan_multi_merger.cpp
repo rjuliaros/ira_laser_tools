@@ -21,7 +21,7 @@ class LaserscanMerger
 {
 public:
   LaserscanMerger();
-  void scanCallback(const sensor_msgs::LaserScan& scan, std::string topic);
+  void scanCallback(const sensor_msgs::LaserScan& scan, int input_number);
   void pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge, sensor_msgs::LaserScan& scan);
   void reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level);
 
@@ -33,16 +33,17 @@ private:
 
   ros::Publisher pointcloud_publisher_;
   ros::Publisher laserscan_publisher_;
-  std::vector<ros::Subscriber> scan_subscribers;
-  std::vector<bool> clouds_modified;
+  std::vector<ros::Subscriber> scan_subscribers_;
 
-  std::map<std::string, sensor_msgs::LaserScan> input_scans_;
-  std::map<std::string, pcl::PointCloud<pcl::PointXYZI>> output_clouds_;
+  std::vector<bool> clouds_modified_;
+  std::vector<sensor_msgs::LaserScan> input_scans_;
+  std::vector<pcl::PointCloud<pcl::PointXYZI>> output_clouds_;
 
   std::vector<std::string> input_topics;
 
   void laserscanTopicParser();
 
+  // scan merging configuration
   double angle_min_;
   double angle_max_;
   double angle_increment_;
@@ -55,7 +56,7 @@ private:
   std::string fixed_frame_;
   std::string cloud_destination_topic_;
   std::string scan_destination_topic_;
-  bool check_topic_type;
+  bool check_topic_type_;
   std::string laserscan_topics_;
 };
 
@@ -83,7 +84,7 @@ void LaserscanMerger::laserscanTopicParser()
 
   std::vector<std::string> tmp_input_topics;
 
-  if (check_topic_type == false)
+  if (check_topic_type_ == false)
   {
     tmp_input_topics = tokens;
   }
@@ -111,24 +112,26 @@ void LaserscanMerger::laserscanTopicParser()
       !equal(tmp_input_topics.begin(), tmp_input_topics.end(), input_topics.begin()))
   {
     // Unsubscribe from previous topics
-    for (int i = 0; i < scan_subscribers.size(); ++i)
-      scan_subscribers[i].shutdown();
+    for (int i = 0; i < scan_subscribers_.size(); ++i)
+      scan_subscribers_[i].shutdown();
 
     input_topics = tmp_input_topics;
     if (input_topics.size() > 0)
     {
-      scan_subscribers.resize(input_topics.size());
-      clouds_modified.resize(input_topics.size());
+      scan_subscribers_.resize(input_topics.size());
+      clouds_modified_.resize(input_topics.size());
+      input_scans_.resize(input_topics.size());
+      output_clouds_.resize(input_topics.size());
       std::ostringstream ss;
-      ss << "Subscribing to " << scan_subscribers.size() << " topics:";
-      //            ROS_INFO("Subscribing to %f topics:", scan_subscribers.size());
+      ss << "Subscribing to " << scan_subscribers_.size() << " topics:";
       for (int i = 0; i < input_topics.size(); ++i)
       {
-        // this node_.subscribe<MsgType, const MsgType&> is needed to bind to a callback which receives a const Type&
+        // this weird node_.subscribe<MsgType, const MsgType&> is needed to bind to a callback
+        // which receives a const Type&
         // otherwise, we are forced to subscribe to callback which receives a shared_ptr
-        scan_subscribers[i] = node_.subscribe<sensor_msgs::LaserScan, const sensor_msgs::LaserScan&>(
-            input_topics[i], 1, boost::bind(&LaserscanMerger::scanCallback, this, _1, input_topics[i]));
-        clouds_modified[i] = false;
+        scan_subscribers_[i] = node_.subscribe<sensor_msgs::LaserScan, const sensor_msgs::LaserScan&>(
+            input_topics[i], 1, boost::bind(&LaserscanMerger::scanCallback, this, _1, i));
+        clouds_modified_[i] = false;
         ss << " " << input_topics[i];
       }
       ROS_INFO_STREAM(ss.str());
@@ -153,7 +156,7 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
   laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_, 1, false);
 }
 
-void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, std::string topic)
+void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, int input_number)
 {
   // Verify that TF knows how to transform from the received scan to the fixed scan frame
   // as we are using a high precission projector, we need the tf at the time of the last
@@ -170,7 +173,7 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, std::stri
     return;
   }
 
-  input_scans_[topic] = scan;
+  input_scans_[input_number] = scan;
   sensor_msgs::PointCloud2 scan_in_fixed_frame;
   try
   {
@@ -179,13 +182,13 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, std::stri
     // a warning message about intensities missing field
     if (scan.intensities.size() != 0)
     {
-      pcl::fromROSMsg(scan_in_fixed_frame, output_clouds_[topic]);
+      pcl::fromROSMsg(scan_in_fixed_frame, output_clouds_[input_number]);
     }
     else
     {
       pcl::PointCloud<pcl::PointXYZ> cloud_without_intensities;
       pcl::fromROSMsg(scan_in_fixed_frame, cloud_without_intensities);
-      pcl::copyPointCloud(cloud_without_intensities, output_clouds_[topic]);
+      pcl::copyPointCloud(cloud_without_intensities, output_clouds_[input_number]);
     }
   }
   catch (const tf::TransformException& ex)
@@ -194,56 +197,48 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, std::stri
     return;
   }
 
-  for (int i = 0; i < input_topics.size(); ++i)
-  {
-    if (topic.compare(input_topics[i]) == 0)
-    {
-      clouds_modified[i] = true;
-    }
-  }
+  clouds_modified_[input_number] = true;
 
   // Count how many scans we have
   int totalClouds = 0;
-  for (int i = 0; i < clouds_modified.size(); ++i)
-    if (clouds_modified[i])
+  for (int i = 0; i < clouds_modified_.size(); ++i)
+    if (clouds_modified_[i])
       ++totalClouds;
 
   // Go ahead only if all subscribed scans have arrived
-  if (totalClouds == clouds_modified.size())
+  if (totalClouds == clouds_modified_.size())
   {
     ros::Time current_stamp;
     pcl_conversions::fromPCL(std::min_element(output_clouds_.begin(), output_clouds_.end(),
-                                              [](std::pair<std::string, pcl::PointCloud<pcl::PointXYZI>> n,
-                                                 std::pair<std::string, pcl::PointCloud<pcl::PointXYZI>> m) {
-                                                return n.second.header.stamp < m.second.header.stamp;
+                                              [](pcl::PointCloud<pcl::PointXYZI> n, pcl::PointCloud<pcl::PointXYZI> m) {
+                                                return n.header.stamp < m.header.stamp;
                                               })
-                                 ->second.header.stamp,
+                                 ->header.stamp,
                              current_stamp);
 
     int first = 0;
-    // for (first = 0; first < clouds_modified.size(); first++)
-    //  if (output_clouds_[first].points.size() != 0)
-    //    break;
+    for (first = 0; first < clouds_modified_.size(); first++)
+      if (output_clouds_[first].points.size() != 0)
+        break;
 
-    if (first == clouds_modified.size())
+    if (first == clouds_modified_.size())
     {
       ROS_INFO_THROTTLE(5, "Input is empty (either laserscan was empty or couldn't be transformed into fixed frame)");
       return;
     }
 
-    for (int i = first; i < clouds_modified.size(); ++i)
+    for (int i = first; i < clouds_modified_.size(); ++i)
     {
-      clouds_modified[i] = false;
+      clouds_modified_[i] = false;
     }
 
     pcl::PointCloud<pcl::PointXYZI> merge;
     merge.header.frame_id = destination_frame_;
     merge.header.stamp = pcl_conversions::toPCL(current_stamp);
-    for (auto& c : output_clouds_)
+    for (auto& cloud : output_clouds_)
     {
       pcl::PointCloud<pcl::PointXYZI> transformed;
-      pcl_ros::transformPointCloud(destination_frame_, current_stamp, c.second, fixed_frame_, transformed,
-                                   tf_listener_);
+      pcl_ros::transformPointCloud(destination_frame_, current_stamp, cloud, fixed_frame_, transformed, tf_listener_);
       merge += transformed;
     }
 
