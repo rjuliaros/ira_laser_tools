@@ -22,7 +22,8 @@ class LaserscanMerger
 public:
   LaserscanMerger();
   void scanCallback(const sensor_msgs::LaserScan& scan, int input_number);
-  void pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge, sensor_msgs::LaserScan& scan);
+  void pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge, sensor_msgs::LaserScan& scan,
+                             pcl::PointCloud<pcl::PointXYZI>& output_cloud);
   void reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level);
 
 private:
@@ -243,32 +244,35 @@ void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, int input
       merge += transformed;
     }
 
-    pointcloud_publisher_.publish(merge);
-
     sensor_msgs::LaserScan output_scan;
     output_scan.header.frame_id = destination_frame_;
     output_scan.header.stamp = current_stamp;
-    pointcloudToLaserscan(merge, output_scan);
+    pcl::PointCloud<pcl::PointXYZI> output_cloud;
+    output_cloud.header = merge.header;
+    pointcloudToLaserscan(merge, output_scan, output_cloud);
 
+    pointcloud_publisher_.publish(output_cloud);
     laserscan_publisher_.publish(output_scan);
   }
 }
 
 void LaserscanMerger::pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge,
-                                            sensor_msgs::LaserScan& output)
+                                            sensor_msgs::LaserScan& output_scan,
+                                            pcl::PointCloud<pcl::PointXYZI>& output_cloud)
 {
-  output.angle_min = this->angle_min_;
-  output.angle_max = this->angle_max_;
-  output.angle_increment = this->angle_increment_;
-  output.time_increment = this->time_increment_;
-  output.scan_time = this->scan_time_;
-  output.range_min = this->range_min_;
-  output.range_max = this->range_max_;
+  output_scan.angle_min = this->angle_min_;
+  output_scan.angle_max = this->angle_max_;
+  output_scan.angle_increment = this->angle_increment_;
+  output_scan.time_increment = this->time_increment_;
+  output_scan.scan_time = this->scan_time_;
+  output_scan.range_min = this->range_min_;
+  output_scan.range_max = this->range_max_;
 
-  uint32_t ranges_size = std::ceil((output.angle_max - output.angle_min) / output.angle_increment);
-  output.ranges.assign(ranges_size, output.range_max + 1.0);
+  uint32_t ranges_size = std::ceil((output_scan.angle_max - output_scan.angle_min) / output_scan.angle_increment);
+  output_scan.ranges.assign(ranges_size, output_scan.range_max + 1.0);
+  output_scan.intensities.assign(ranges_size, 0);
 
-  output.intensities.assign(ranges_size, 0);
+  output_cloud.points.clear();
   for (auto& point : merge.points)
   {
     const float& x = point.x;
@@ -282,7 +286,7 @@ void LaserscanMerger::pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI
     }
 
     double range_sq = y * y + x * x;
-    double range_min_sq_ = output.range_min * output.range_min;
+    double range_min_sq_ = output_scan.range_min * output_scan.range_min;
     if (range_sq < range_min_sq_)
     {
       ROS_DEBUG("rejected for range %f below minimum value %f. Point: (%f, %f, %f)", range_sq, range_min_sq_, x, y, z);
@@ -290,17 +294,18 @@ void LaserscanMerger::pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI
     }
 
     double angle = atan2(y, x);
-    if (angle < output.angle_min || angle > output.angle_max)
+    if (angle < output_scan.angle_min || angle > output_scan.angle_max)
     {
-      ROS_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, output.angle_min, output.angle_max);
+      ROS_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, output_scan.angle_min, output_scan.angle_max);
       continue;
     }
-    int index = (angle - output.angle_min) / output.angle_increment;
+    int index = (angle - output_scan.angle_min) / output_scan.angle_increment;
 
-    if (output.ranges[index] * output.ranges[index] > range_sq)
+    if (output_scan.ranges[index] * output_scan.ranges[index] > range_sq)
     {
-      output.ranges[index] = sqrt(range_sq);
-      output.intensities[index] = intensity;
+      output_scan.ranges[index] = sqrt(range_sq);
+      output_scan.intensities[index] = intensity;
+      output_cloud.points.push_back(point);
     }
   }
 }
