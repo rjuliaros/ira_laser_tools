@@ -70,6 +70,7 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
   private_node_.getParam("scan_destination_topic", scan_destination_topic_);
 
   private_node_.getParam("laserscan_topics", laserscan_topics_);
+  check_topic_type_ = false;
   private_node_.getParam("check_topic_type", check_topic_type_);
 
   laserscanTopicParser();
