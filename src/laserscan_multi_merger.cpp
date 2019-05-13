@@ -24,7 +24,7 @@ public:
   void scanCallback(const sensor_msgs::LaserScan& scan, int input_number);
   void pointcloudToLaserscan(const pcl::PointCloud<pcl::PointXYZI>& merge, sensor_msgs::LaserScan& scan,
                              pcl::PointCloud<pcl::PointXYZI>& output_cloud);
-  void reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level);
+  void reconfigureCallback(ira_laser_tools::LaserscanMultiMergerConfig& config, uint32_t level);
 
 private:
   ros::NodeHandle node_;
@@ -78,7 +78,7 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
   laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_, 1, false);
 }
 
-void LaserscanMerger::reconfigureCallback(laserscan_multi_merger::LaserscanMultiMergerConfig& config, uint32_t level)
+void LaserscanMerger::reconfigureCallback(ira_laser_tools::LaserscanMultiMergerConfig& config, uint32_t level)
 {
   this->angle_min_ = config.angle_min;
   this->angle_max_ = config.angle_max;
@@ -316,8 +316,8 @@ int main(int argc, char** argv)
 
   LaserscanMerger laser_merger;
 
-  dynamic_reconfigure::Server<laserscan_multi_merger::LaserscanMultiMergerConfig> reconfigure_server;
-  dynamic_reconfigure::Server<laserscan_multi_merger::LaserscanMultiMergerConfig>::CallbackType reconfigure_callback;
+  dynamic_reconfigure::Server<ira_laser_tools::LaserscanMultiMergerConfig> reconfigure_server;
+  dynamic_reconfigure::Server<ira_laser_tools::LaserscanMultiMergerConfig>::CallbackType reconfigure_callback;
 
   reconfigure_callback = boost::bind(&LaserscanMerger::reconfigureCallback, &laser_merger, _1, _2);
   reconfigure_server.setCallback(reconfigure_callback);
