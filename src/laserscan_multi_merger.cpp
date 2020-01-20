@@ -42,8 +42,9 @@ private:
 
   std::vector<std::string> input_topics_;
 
-  void laserscanTopicParser();
+  int laserscanTopicParser();
   void subscribeToTopics();
+  
 
   // scan merging configuration
   double angle_min_;
@@ -60,6 +61,10 @@ private:
   std::string scan_destination_topic_;
   bool check_topic_type_;
   std::string laserscan_topics_;
+
+public:
+
+  void waitForInputTopics();
 };
 
 LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
@@ -72,9 +77,6 @@ LaserscanMerger::LaserscanMerger() : node_(""), private_node_("~")
   private_node_.getParam("laserscan_topics", laserscan_topics_);
   check_topic_type_ = false;
   private_node_.getParam("check_topic_type", check_topic_type_);
-
-  laserscanTopicParser();
-  subscribeToTopics();
 
   pointcloud_publisher_ = private_node_.advertise<sensor_msgs::PointCloud2>(cloud_destination_topic_, 1, false);
   laserscan_publisher_ = private_node_.advertise<sensor_msgs::LaserScan>(scan_destination_topic_, 1, false);
@@ -91,7 +93,29 @@ void LaserscanMerger::reconfigureCallback(ira_laser_tools::LaserscanMultiMergerC
   this->range_max_ = config.range_max;
 }
 
-void LaserscanMerger::laserscanTopicParser()
+void LaserscanMerger::waitForInputTopics(){
+  ros::Rate r(1);
+  bool topics_found = false;
+
+  while (ros::ok() && (topics_found != true))
+  {
+    ROS_WARN_STREAM_THROTTLE(5, "LaserscanMerger::waitForInputTopics: waiting for scan topics " << laserscan_topics_ );
+   
+    if(laserscanTopicParser() == 0)
+    {
+      subscribeToTopics();
+      topics_found = true;
+    }
+
+    ros::spinOnce();
+    r.sleep();
+     
+  }
+
+
+}
+
+int LaserscanMerger::laserscanTopicParser()
 {
   // LaserScan topics to subscribe
   ros::master::V_TopicInfo topics;
@@ -103,6 +127,7 @@ void LaserscanMerger::laserscanTopicParser()
             std::back_inserter<std::vector<std::string>>(tokens));
 
   std::vector<std::string> tmp_input_topics_;
+  
 
   if (check_topic_type_ == false)
   {
@@ -118,6 +143,7 @@ void LaserscanMerger::laserscanTopicParser()
             (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0))
         {
           tmp_input_topics_.push_back(topics[j].name);
+          ROS_INFO_STREAM("LaserscanMerger::laserscanTopicParser: found topic " << topics[j].name );
         }
       }
     }
@@ -127,6 +153,11 @@ void LaserscanMerger::laserscanTopicParser()
   std::vector<std::string>::iterator last = std::unique(tmp_input_topics_.begin(), tmp_input_topics_.end());
   tmp_input_topics_.erase(last, tmp_input_topics_.end());
   input_topics_ = tmp_input_topics_;
+
+  if(tokens.size() == input_topics_.size())
+    return 0;
+  else
+    return -1;
 }
 
 void LaserscanMerger::subscribeToTopics()
@@ -154,10 +185,10 @@ void LaserscanMerger::subscribeToTopics()
       clouds_modified_[i] = false;
       ss << " " << input_topics_[i];
     }
-    ROS_INFO_STREAM(ss.str());
+    ROS_INFO_STREAM("LaserscanMerger::subscribeToTopic: " << ss.str());
   }
   else
-    ROS_INFO("Not subscribed to any topic.");
+    ROS_ERROR_STREAM("LaserscanMerger::subscribeToTopic: Not subscribed to any topic.");
 }
 
 void LaserscanMerger::scanCallback(const sensor_msgs::LaserScan& scan, int input_number)
@@ -317,12 +348,16 @@ int main(int argc, char** argv)
   ros::init(argc, argv, "laser_multi_merger");
 
   LaserscanMerger laser_merger;
+  
+  laser_merger.waitForInputTopics();
 
   dynamic_reconfigure::Server<ira_laser_tools::LaserscanMultiMergerConfig> reconfigure_server;
   dynamic_reconfigure::Server<ira_laser_tools::LaserscanMultiMergerConfig>::CallbackType reconfigure_callback;
 
   reconfigure_callback = boost::bind(&LaserscanMerger::reconfigureCallback, &laser_merger, _1, _2);
   reconfigure_server.setCallback(reconfigure_callback);
+
+  
 
   ros::spin();
 
