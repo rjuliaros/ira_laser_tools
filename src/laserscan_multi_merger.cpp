@@ -139,6 +139,7 @@ int LaserscanMerger::laserscanTopicParser()
     {
       for (int j = 0; j < topics.size(); ++j)
       {
+        ROS_INFO_STREAM(node_.resolveName(tokens[i]));
         if ((topics[j].name.compare(node_.resolveName(tokens[i])) == 0) &&
             (topics[j].datatype.compare("sensor_msgs/LaserScan") == 0))
         {
